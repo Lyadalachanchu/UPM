@@ -1,0 +1,39 @@
+### READERS
+POST http://localhost:8080/v1/graphql
+Content-Type: application/json
+
+{
+  "query": "{ Get { Reader { name readPapers { ... on Paper { id } } } } }"
+}
+
+### SCHEMA
+GET http://localhost:8080/v1/schema
+
+### PAPERS
+GET http://localhost:8080/v1/objects?class=Paper
+
+### READERS
+GET http://localhost:8080/v1/objects?class=Reader
+
+
+### CLEAR
+DELETE http://localhost:8080/v1/schema/Paper
+
+### CLEAR
+DELETE http://localhost:8080/v1/schema/Reader
+
+### CLEAR
+DELETE http://localhost:8080/v1/schema/PaperReference
+
+
+
+
+### PAPERS BY AUTHOR
+POST http://localhost:8080/v1/graphql
+Content-Type: application/json
+
+{
+  "query": "{ Get { Paper { title authors { ... on Reader { name } } } } }"
+}
+
+
