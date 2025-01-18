@@ -367,41 +367,6 @@ func enrichPapersWithEmbeddings(papers map[string]Paper) error {
 	return nil
 }
 
-func createReferences(client *weaviate.Client, paperUUID string, readerUUIDs []string) error {
-	for _, readerUUID := range readerUUIDs {
-		err := client.Data().ReferenceCreator().
-			WithClassName("Paper").
-			WithID(paperUUID).
-			WithReferenceProperty("authors").
-			WithReference(client.Data().ReferencePayloadBuilder().
-				WithClassName("Reader").
-				WithID(readerUUID).
-				Payload()).
-			Do(context.Background())
-		if err != nil {
-			return fmt.Errorf("error creating reference from Paper to Reader: %v", err)
-		}
-	}
-
-	// Add references from Readers to Paper
-	for _, readerUUID := range readerUUIDs {
-		err := client.Data().ReferenceCreator().
-			WithClassName("Reader").
-			WithID(readerUUID).
-			WithReferenceProperty("readPapers").
-			WithReference(client.Data().ReferencePayloadBuilder().
-				WithClassName("Paper").
-				WithID(paperUUID).
-				Payload()).
-			Do(context.Background())
-		if err != nil {
-			return fmt.Errorf("error creating reference from Reader to Paper: %v", err)
-		}
-	}
-
-	return nil
-}
-
 func setupSchema(client *weaviate.Client) error {
 	// Define Reader class
 	readerClass := &models.Class{
@@ -460,101 +425,6 @@ func containsAlreadyExistsError(err error) bool {
 	return err != nil && (strings.Contains(err.Error(), "already exists"))
 }
 
-func enrichReaderWithPaperData(client *weaviate.Client, readerUUID string, paperUUID string, paperEmbedding []float64, references []Reference) error {
-	if err := updateReaderWithPapers(client, readerUUID, []string{paperUUID}); err != nil {
-		return fmt.Errorf("error updating reader with paper: %v", err)
-	}
-
-	// Process references
-	var refUUIDs []string
-	for _, ref := range references {
-		refUUID := uuid.New().String() // Generate a UUID for each reference
-		refUUIDs = append(refUUIDs, refUUID)
-		// Optionally, save reference as a Paper object in Weaviate
-		log.Printf("Processing reference: %v", ref)
-	}
-
-	if err := updateReaderWithPapers(client, readerUUID, refUUIDs); err != nil {
-		return fmt.Errorf("error updating reader with references: %v", err)
-	}
-
-	return updateReaderEmbedding(client, readerUUID, paperEmbedding)
-}
-
-func updateReaderEmbedding(client *weaviate.Client, readerUUID string, newEmbedding []float64) error {
-	// Fetch the existing average embedding
-	// Compute a new average with the additional embedding
-	// Update the `averageEmbedding` property
-	return client.Data().Updater().
-		WithClassName("Reader").
-		WithID(readerUUID).
-		WithProperties(map[string]interface{}{
-			"averageEmbedding": newEmbedding,
-		}).
-		Do(context.Background())
-}
-
-func createPaper(client *weaviate.Client, paperID string, paper Paper, readerUUIDs []string) (string, error) {
-	id := uuid.New()
-	object := &models.Object{
-		Class: "Paper",
-		Properties: map[string]interface{}{
-			"title":     paper.Title,
-			"abstract":  paper.Abstract,
-			"embedding": paper.Embedding,
-			"authors":   buildReferencePayload(readerUUIDs),
-		},
-		ID: strfmt.UUID(id.String()),
-	}
-
-	_, err := client.Data().Creator().
-		WithClassName("Paper").
-		WithProperties(object.Properties).
-		WithID(id.String()).
-		Do(context.Background())
-
-	if err != nil {
-		return "", fmt.Errorf("error creating Paper object: %v", err)
-	}
-
-	log.Printf("Paper created: %s (UUID: %s)", paper.Title, id.String())
-	return id.String(), nil
-}
-
-func createPaperWithAuthors(client *weaviate.Client, paperID string, paper Paper, readerUUIDs []string) (string, error) {
-	// Create Paper
-	paperUUID, err := createPaper(client, paperID, paper, readerUUIDs)
-	if err != nil {
-		return "", err
-	}
-
-	// Enrich Readers with references and embeddings
-	for _, readerUUID := range readerUUIDs {
-		if err := enrichReaderWithPaperData(client, readerUUID, paperUUID, paper.Embedding, paper.References); err != nil {
-			log.Printf("Error enriching reader %s: %v", readerUUID, err)
-		}
-	}
-
-	return paperUUID, nil
-}
-
-func updateReaderWithPapers(client *weaviate.Client, readerUUID string, paperUUIDs []string) error {
-	err := client.Data().Updater().
-		WithClassName("Reader").
-		WithID(readerUUID).
-		WithProperties(map[string]interface{}{
-			"readPapers": buildReferencePayload(paperUUIDs),
-		}).
-		Do(context.Background())
-
-	if err != nil {
-		return fmt.Errorf("error updating Reader with papers: %v", err)
-	}
-
-	log.Printf("Updated Reader %s with Papers: %v", readerUUID, paperUUIDs)
-	return nil
-}
-
 func buildReferencePayload(uuids []string) []map[string]string {
 	refs := make([]map[string]string, len(uuids))
 	for i, uuid := range uuids {
@@ -563,135 +433,78 @@ func buildReferencePayload(uuids []string) []map[string]string {
 	return refs
 }
 
-func createReader(client *weaviate.Client, readerName string, readerID string) (string, error) {
-	id := uuid.New()
+func createReader(client *weaviate.Client, readerName string) (string, error) {
+	id := uuid.New().String()
 	object := &models.Object{
 		Class: "Reader",
 		Properties: map[string]interface{}{
 			"name": readerName,
 		},
-		ID: strfmt.UUID(id.String()),
-	}
-
-	_, err := client.Data().Creator().
-		WithClassName("Reader").
-		WithProperties(object.Properties).
-		WithID(id.String()).
-		Do(context.Background())
-	if err != nil {
-		return "", fmt.Errorf("error creating Reader object: %v", err)
-	}
-
-	log.Printf("Reader created: %s (UUID: %s)", readerName, id.String())
-	return id.String(), nil
-}
-
-func linkPaperToReader(client *weaviate.Client, readerID, paperID string) error {
-	err := client.Data().ReferenceCreator().
-		WithClassName("Reader").
-		WithReferenceProperty("readPapers").
-		WithReference(client.Data().ReferencePayloadBuilder().
-			WithID(readerID).
-			WithClassName("Paper").
-			Payload()).
-		Do(context.Background())
-	if err != nil {
-		return fmt.Errorf("error linking Paper to Reader: %v", err)
-	}
-
-	log.Printf("Linked Paper %s to Reader %s", paperID, readerID)
-	return nil
-}
-
-func linkReaderToPaper(client *weaviate.Client, paperID, readerID string) error {
-	err := client.Data().ReferenceCreator().
-		WithID(readerID).
-		WithClassName("Paper").
-		WithReferenceProperty("readers").
-		WithReference(client.Data().ReferencePayloadBuilder().
-			WithID(paperID).
-			WithClassName("Reader").
-			Payload()).
-		Do(context.Background())
-	if err != nil {
-		return fmt.Errorf("error linking Reader to Paper: %v", err)
-	}
-
-	log.Printf("Linked Reader %s to Paper %s", readerID, paperID)
-	return nil
-}
-
-func createPaperReference(client *weaviate.Client, paperUUID, readerUUID string) error {
-	id := uuid.New().String()
-	object := &models.Object{
-		Class: "PaperReference",
-		Properties: map[string]interface{}{
-			"paper":  map[string]interface{}{"beacon": fmt.Sprintf("weaviate://localhost/%s", paperUUID)},
-			"reader": map[string]interface{}{"beacon": fmt.Sprintf("weaviate://localhost/%s", readerUUID)},
-		},
 		ID: strfmt.UUID(id),
 	}
 
 	_, err := client.Data().Creator().
-		WithClassName("PaperReference").
+		WithClassName("Reader").
 		WithProperties(object.Properties).
 		WithID(id).
 		Do(context.Background())
 	if err != nil {
-		return fmt.Errorf("error creating PaperReference: %v", err)
+		return "", err
 	}
 
-	log.Printf("PaperReference created: Paper UUID=%s, Reader UUID=%s (UUID=%s)", paperUUID, readerUUID, id)
+	return id, nil
+}
+
+func linkReaderToPaper(client *weaviate.Client, readerID, paperID string) error {
+	err := client.Data().ReferenceCreator().
+		WithClassName("Reader").
+		WithID(readerID).
+		WithReferenceProperty("readPapers").
+		WithReference(client.Data().ReferencePayloadBuilder().
+			WithClassName("Paper").
+			WithID(paperID).
+			Payload()).
+		Do(context.Background())
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
 func saveToDatabase(client *weaviate.Client, papers map[string]Paper) error {
-	for paperID, paper := range papers {
-		// Ensure Readers (Authors) exist and collect their UUIDs
+	for _, paper := range papers {
 		readerUUIDs := []string{}
 		for _, author := range paper.Authors {
-			readerID := strings.ReplaceAll(author, " ", "_")
-			readerUUID, err := createReader(client, author, readerID)
+			readerUUID, err := createReader(client, author)
 			if err != nil {
-				log.Printf("Warning: Could not create reader %s: %v", author, err)
+				log.Printf("Error creating Reader %s: %v", author, err)
 				continue
 			}
 			readerUUIDs = append(readerUUIDs, readerUUID)
 		}
 
-		// Create Paper
-		paperUUID, err := createPaper(client, paperID, paper, nil)
+		paperUUID, err := createPaperWithAuthors(client, paper, readerUUIDs)
 		if err != nil {
-			log.Printf("Error saving paper %s: %v", paper.Title, err)
+			log.Printf("Error creating Paper %s: %v", paper.Title, err)
 			continue
 		}
 
-		// Create PaperReferences for each author
 		for _, readerUUID := range readerUUIDs {
-			err := createPaperReference(client, paperUUID, readerUUID)
-			if err != nil {
-				log.Printf("Error creating PaperReference for Paper %s and Reader %s: %v", paperUUID, readerUUID, err)
+			if err := linkReaderToPaper(client, readerUUID, paperUUID); err != nil {
+				log.Printf("Error linking Paper %s to Reader %s: %v", paperUUID, readerUUID, err)
 			}
 		}
 
-		// Add the paper to each author's read history
-		for _, readerUUID := range readerUUIDs {
-			if err := updateReaderWithPapers(client, readerUUID, []string{paperUUID}); err != nil {
-				log.Printf("Error linking Reader %s to Paper %s: %v", readerUUID, paperUUID, err)
-			}
-		}
-
-		// Save references of the paper
 		for _, reference := range paper.References {
-			refReaderUUIDs := []string{}
+			referenceUUIDs := []string{}
 			for _, refAuthor := range reference.Authors {
-				refReaderID := strings.ReplaceAll(refAuthor, " ", "_")
-				refReaderUUID, err := createReader(client, refAuthor, refReaderID)
+				refReaderUUID, err := createReader(client, refAuthor)
 				if err != nil {
-					log.Printf("Warning: Could not create reference reader %s: %v", refAuthor, err)
+					log.Printf("Error creating Reader %s for Reference: %v", refAuthor, err)
 					continue
 				}
-				refReaderUUIDs = append(refReaderUUIDs, refReaderUUID)
+				referenceUUIDs = append(referenceUUIDs, refReaderUUID)
 			}
 
 			refPaper := Paper{
@@ -701,20 +514,46 @@ func saveToDatabase(client *weaviate.Client, papers map[string]Paper) error {
 				Embedding: reference.Embedding,
 			}
 
-			refPaperUUID, err := createPaper(client, uuid.New().String(), refPaper, nil)
+			refPaperUUID, err := createPaperWithAuthors(client, refPaper, referenceUUIDs)
 			if err != nil {
-				log.Printf("Error saving reference paper %s: %v", reference.Title, err)
+				log.Printf("Error creating referenced Paper %s: %v", refPaper.Title, err)
 				continue
 			}
 
-			for _, refReaderUUID := range refReaderUUIDs {
-				if err := createPaperReference(client, refPaperUUID, refReaderUUID); err != nil {
-					log.Printf("Error creating PaperReference for Reference Paper %s and Reader %s: %v", refPaperUUID, refReaderUUID, err)
+			for _, refReaderUUID := range referenceUUIDs {
+				if err := linkReaderToPaper(client, refReaderUUID, refPaperUUID); err != nil {
+					log.Printf("Error linking Referenced Paper %s to Reader %s: %v", refPaperUUID, refReaderUUID, err)
 				}
 			}
 		}
 	}
 	return nil
+}
+
+func createPaperWithAuthors(client *weaviate.Client, paper Paper, authorUUIDs []string) (string, error) {
+	id := uuid.New().String()
+	object := &models.Object{
+		Class: "Paper",
+		Properties: map[string]interface{}{
+			"title":     paper.Title,
+			"abstract":  paper.Abstract,
+			"embedding": paper.Embedding,
+			"authors":   buildReferencePayload(authorUUIDs),
+		},
+		ID: strfmt.UUID(id),
+	}
+
+	_, err := client.Data().Creator().
+		WithClassName("Paper").
+		WithProperties(object.Properties).
+		WithID(id).
+		Do(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("error creating Paper: %v", err)
+	}
+
+	log.Printf("Paper created: %s (UUID: %s)", paper.Title, id)
+	return id, nil
 }
 
 type Reader struct {
