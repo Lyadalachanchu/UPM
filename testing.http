@@ -37,3 +37,61 @@ Content-Type: application/json
 }
 
 
+
+### Get single article (00091759-62dd-4b9c-ab67-66b429d9eb51)
+GET http://localhost:8080/v1/objects
+Content-Type: application/json
+
+{
+  "class": "Paper",
+  "limit": 1,
+  "where": {
+    "path": ["title"],
+    "operator": "Equal",
+    "valueText": "Filter Bubbles, Echo Chambers, and Online News Consumption"
+  }
+}
+
+
+###
+POST http://localhost:8080/v1/graphql
+Content-Type: application/json
+
+{"query":"{ Get { Paper(nearObject: {id: \"00091759-62dd-4b9c-ab67-66b429d9eb51\"} limit: 100) { title abstract authors { ... on Reader { name } } } } }"}
+
+
+###
+POST http://localhost:8080/v1/schema
+Content-Type: application/json
+
+{
+  "class": "Paper",
+  "properties": [
+    {
+      "name": "title",
+      "dataType": ["text"],
+      "tokenization": "whitespace"
+    },
+    {
+      "name": "abstract",
+      "dataType": ["text"],
+      "tokenization": "whitespace"
+    },
+    {
+      "name": "embedding",
+      "dataType": ["number[]"],
+      "indexFilterable": true
+    },
+    {
+      "name": "authors",
+      "dataType": ["Reader"]
+    }
+  ],
+  "vectorizer": "none",
+  "vectorIndexConfig": {
+    "distance": "cosine",
+    "efConstruction": 128,
+    "ef": -1,
+    "maxConnections": 32
+  }
+}

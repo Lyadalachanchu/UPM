@@ -50,23 +50,7 @@ func saveToJSONFile(papers map[string]Paper, readers map[string]Reader, filePath
 }
 
 func main() {
-	arxivIDs, err := fetchPapersFromArxiv("cs.IR", "2020-01-01", "2024-12-31", 3, 3)
-	if err != nil {
-		log.Fatalf("Error fetching Arxiv papers: %v", err)
-	}
-	log.Printf("Fetched %d Arxiv IDs", len(arxivIDs))
-	log.Printf("Arxiv IDs: %v", arxivIDs)
-
-	papers, err := fetchBatchFromSemanticScholar(arxivIDs, 50)
-	if err != nil {
-		log.Fatalf("Error fetching from Semantic Scholar: %v", err)
-	}
-
-	log.Printf("Fetched %d papers from Semantic Scholar", len(papers))
-	err = enrichPapersWithEmbeddings(papers)
-	if err != nil {
-		log.Fatalf("Error enriching papers with embeddings: %v", err)
-	}
+	err, papers := fetchPapersWithReferencesAndEnrichWithEmbeddings(10)
 
 	readers := map[string]Reader{}
 	err = saveToJSONFile(papers, readers, "papers.json")

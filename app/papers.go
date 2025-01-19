@@ -26,39 +26,54 @@ func fetchPapersFromArxiv(category, startDate, endDate string, batchSize, maxPap
 	var arxivIDs []string
 	start := 0
 
+	// Ensure batchSize doesn't exceed ArXiv's limit
+	if batchSize > 100 {
+		batchSize = 100
+	}
+
 	for len(arxivIDs) < maxPapers {
-		params := fmt.Sprintf("search_query=cat:%s+AND+submittedDate:[%s+TO+%s]&start=%d&max_results=%d", category, startDate, endDate, start, batchSize)
+		// Prepare the query parameters
+		params := fmt.Sprintf(
+			"search_query=cat:%s+AND+submittedDate:[%s+TO+%s]&start=%d&max_results=%d",
+			category, startDate, endDate, start, batchSize,
+		)
 		url := fmt.Sprintf("%s?%s", baseURL, params)
 
+		// Make the API request
 		resp, err := http.Get(url)
 		if err != nil {
 			return nil, fmt.Errorf("error fetching from ArXiv: %v", err)
 		}
 		defer resp.Body.Close()
 
+		// Read and parse the response
 		var arxivResponse ArxivResponse
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return nil, fmt.Errorf("error reading ArXiv response: %v", err)
 		}
-
 		if err := xml.Unmarshal(body, &arxivResponse); err != nil {
 			return nil, fmt.Errorf("error decoding ArXiv XML: %v", err)
 		}
 
+		// Extract IDs from the response
 		for _, entry := range arxivResponse.Entries {
 			parts := strings.Split(entry.ID, "/")
 			if len(parts) > 0 {
 				arxivId := parts[len(parts)-1]
+				// Remove version suffix
 				arxivId = strings.Split(arxivId, "v")[0]
 				arxivIDs = append(arxivIDs, arxivId)
 			}
 		}
 
-		if len(arxivResponse.Entries) < batchSize {
-			break
-		}
+		// Update the `start` index for the next batch
 		start += batchSize
+	}
+
+	// Limit the total number of IDs to `maxPapers`
+	if len(arxivIDs) > maxPapers {
+		arxivIDs = arxivIDs[:maxPapers]
 	}
 
 	return arxivIDs, nil
@@ -96,7 +111,12 @@ func fetchBatchFromSemanticScholar(arxivIDs []string, batchSize int) (map[string
 		if err != nil {
 			return nil, fmt.Errorf("error sending request: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func(Body io.ReadCloser) {
+			err := Body.Close()
+			if err != nil {
+				log.Printf("Error closing response body: %v", err)
+			}
+		}(resp.Body)
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
@@ -338,4 +358,24 @@ func enrichPapersWithEmbeddings(papers map[string]Paper) error {
 		papers[id] = paper
 	}
 	return nil
+}
+
+func fetchPapersWithReferencesAndEnrichWithEmbeddings(maxPapers int) (error, map[string]Paper) {
+	arxivIDs, err := fetchPapersFromArxiv("cs.IR", "2020-01-01", "2024-12-31", 200, maxPapers)
+	if err != nil {
+		log.Fatalf("Error fetching Arxiv papers: %v", err)
+	}
+	log.Printf("Fetched %d Arxiv IDs", len(arxivIDs))
+
+	papers, err := fetchBatchFromSemanticScholar(arxivIDs, 50)
+	if err != nil {
+		log.Fatalf("Error fetching from Semantic Scholar: %v", err)
+	}
+
+	log.Printf("Fetched %d papers from Semantic Scholar", len(papers))
+	err = enrichPapersWithEmbeddings(papers)
+	if err != nil {
+		log.Fatalf("Error enriching papers with embeddings: %v", err)
+	}
+	return err, papers
 }
