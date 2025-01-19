@@ -26,8 +26,6 @@ DELETE http://localhost:8080/v1/schema/Reader
 DELETE http://localhost:8080/v1/schema/PaperReference
 
 
-
-
 ### PAPERS BY AUTHOR
 POST http://localhost:8080/v1/graphql
 Content-Type: application/json
@@ -46,7 +44,9 @@ Content-Type: application/json
   "class": "Paper",
   "limit": 1,
   "where": {
-    "path": ["title"],
+    "path": [
+      "title"
+    ],
     "operator": "Equal",
     "valueText": "Filter Bubbles, Echo Chambers, and Online News Consumption"
   }
@@ -57,41 +57,60 @@ Content-Type: application/json
 POST http://localhost:8080/v1/graphql
 Content-Type: application/json
 
-{"query":"{ Get { Paper(nearObject: {id: \"00091759-62dd-4b9c-ab67-66b429d9eb51\"} limit: 100) { title abstract authors { ... on Reader { name } } } } }"}
+{
+  "query": "{ Get { Paper(nearObject: {id: \"00009576-b5e8-4c12-8197-17e0c936b118\"} limit: 100) { title abstract authors { ... on Reader { name } } } } }"
+}
 
 
 ###
 POST http://localhost:8080/v1/schema
 Content-Type: application/json
+Content-Type: application/json
 
 {
-  "class": "Paper",
-  "properties": [
-    {
-      "name": "title",
-      "dataType": ["text"],
-      "tokenization": "whitespace"
-    },
-    {
-      "name": "abstract",
-      "dataType": ["text"],
-      "tokenization": "whitespace"
-    },
-    {
-      "name": "embedding",
-      "dataType": ["number[]"],
-      "indexFilterable": true
-    },
-    {
-      "name": "authors",
-      "dataType": ["Reader"]
-    }
-  ],
-  "vectorizer": "none",
-  "vectorIndexConfig": {
-    "distance": "cosine",
-    "efConstruction": 128,
-    "ef": -1,
-    "maxConnections": 32
-  }
+  "query": "{ Get { Reader(where: { path: [\"_id\"], operator: Equal, valueString: \"%s\" }) { readPapers { ... on Paper { embedding } } } } }"
 }
+
+
+###
+POST http://localhost:8080/v1/graphql
+Content-Type: application/json
+
+{
+  "query": "{ Get { Paper(where: { path: [\"id\"], operator: Equal, valueString: \"f632472f-de10-48f8-bc5d-25cb4f56ebfb\" }) { title abstract } } }"
+}
+
+###
+POST http://localhost:8080/v1/graphql
+Content-Type: application/json
+
+{
+  "query": "{ Get { Paper(where: { path: [\"title\"], operator: Equal, valueString: \"LightGCN: Simplifying and Powering Graph Convolution Network for Recommendation\" }) { title _additional { id } } } }"
+}
+
+###
+POST http://localhost:8080/v1/graphql
+Content-Type: application/json
+
+{
+  "query": "{ Get { Paper(where: { path: [\"title\"], operator: Equal, valueString: \"LightGCN: Simplifying and Powering Graph Convolution Network for Recommendation\" }) { title _additional { id } } } }"
+}
+
+###
+POST http://localhost:8080/v1/graphql
+Content-Type: application/json
+
+{
+  "query": "{ Get { Paper(nearObject: { id: \"f632472f-de10-48f8-bc5d-25cb4f56ebfb\" } limit: 30) { title abstract authors { ... on Reader { name } } _additional { score distance id } } } }"
+}
+
+###
+POST http://localhost:8081/api/core/search-papers
+Content-Type: application/json
+
+{
+  "searchTerm": "LightGCN: Simplifying and Powering Graph Convolution Network for Recommendation"
+}
+
+###
+

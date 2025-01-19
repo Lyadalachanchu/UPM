@@ -12,18 +12,20 @@ import (
 )
 
 func setupSchema(client *weaviate.Client) error {
-	// Define Reader class
 	readerClass := &models.Class{
-		Class: "Reader",
+		Class:           "Reader",
+		Vectorizer:      "none",
+		VectorIndexType: "hnsw",
 		Properties: []*models.Property{
 			{Name: "name", DataType: []string{"string"}},
 			{Name: "averageEmbedding", DataType: []string{"number[]"}},
 		},
 	}
 
-	// Define Paper class
 	paperClass := &models.Class{
-		Class: "Paper",
+		Class:           "Paper",
+		Vectorizer:      "none",
+		VectorIndexType: "hnsw",
 		Properties: []*models.Property{
 			{Name: "title", DataType: []string{"string"}},
 			{Name: "abstract", DataType: []string{"string"}},
@@ -184,21 +186,137 @@ func createPaperWithAuthors(client *weaviate.Client, paper Paper, authorUUIDs []
 			"embedding": paper.Embedding,
 			"authors":   buildReferencePayload(authorUUIDs),
 		},
+
 		ID: strfmt.UUID(id),
 	}
 
-	newEmbeddings := make([]float32, len(paper.Embedding))
+	newEmbedding := convertToFloat32(paper.Embedding)
 
 	_, err := client.Data().Creator().
 		WithClassName("Paper").
 		WithProperties(object.Properties).
 		WithID(id).
-		WithVector(newEmbeddings).
+		WithVector(newEmbedding).
 		Do(context.Background())
 	if err != nil {
 		return "", fmt.Errorf("error creating Paper: %v", err)
 	}
-
-	log.Printf("Paper created: %s (UUID: %s)", paper.Title, id)
 	return id, nil
+}
+
+func convertToFloat32(input []float64) []float32 {
+	output := make([]float32, len(input))
+	for i, v := range input {
+		output[i] = float32(v)
+	}
+	return output
+}
+
+func updateAllReadersAverageEmbedding(client *weaviate.Client) error {
+	query := `{
+        Get {
+            Reader {
+                _id
+            }
+        }
+    }`
+
+	response, err := client.GraphQL().Raw().WithQuery(query).Do(context.Background())
+	if err != nil {
+		return fmt.Errorf("error fetching Readers data: %v", err)
+	}
+
+	readers, ok := response.Data["Get"].(map[string]interface{})["Reader"].([]interface{})
+	if !ok || len(readers) == 0 {
+		return fmt.Errorf("no Readers found in the database")
+	}
+
+	// Step 2: Iterate over each Reader and update their averageEmbedding
+	for _, reader := range readers {
+		r, ok := reader.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		readerID, ok := r["_id"].(string)
+		if !ok {
+			log.Printf("Skipping invalid Reader entry: %+v", r)
+			continue
+		}
+
+		// Fetch papers associated with the current Reader
+		query := fmt.Sprintf(`{
+            Get {
+                Reader(where: {
+                    path: ["_id"],
+                    operator: Equal,
+                    valueString: "%s"
+                }) {
+                    readPapers {
+                        ... on Paper {
+                            embedding
+                        }
+                    }
+                }
+            }
+        }`, readerID)
+
+		response, err := client.GraphQL().Raw().WithQuery(query).Do(context.Background())
+		if err != nil {
+			log.Printf("Error fetching Reader %s data: %v", readerID, err)
+			continue
+		}
+
+		papers, ok := response.Data["Get"].(map[string]interface{})["Reader"].([]interface{})
+		if !ok || len(papers) == 0 {
+			log.Printf("No papers found for Reader %s", readerID)
+			continue
+		}
+
+		paperEmbeddings := []([]float32){}
+		for _, paper := range papers[0].(map[string]interface{})["readPapers"].([]interface{}) {
+			embedding, ok := paper.(map[string]interface{})["embedding"].([]interface{})
+			if !ok {
+				continue
+			}
+			floatEmbedding := make([]float32, len(embedding))
+			for i, v := range embedding {
+				floatEmbedding[i] = float32(v.(float64))
+			}
+			paperEmbeddings = append(paperEmbeddings, floatEmbedding)
+		}
+
+		if len(paperEmbeddings) == 0 {
+			log.Printf("No embeddings found for Reader %s", readerID)
+			continue
+		}
+
+		avgEmbedding := make([]float32, len(paperEmbeddings[0]))
+		for _, embedding := range paperEmbeddings {
+			for i, value := range embedding {
+				avgEmbedding[i] += value
+			}
+		}
+		for i := range avgEmbedding {
+			avgEmbedding[i] /= float32(len(paperEmbeddings))
+		}
+
+		// Update the Reader with the calculated averageEmbedding
+		err = client.Data().Updater().
+			WithClassName("Reader").
+			WithID(readerID).
+			WithProperties(map[string]interface{}{
+				"averageEmbedding": avgEmbedding,
+			}).
+			Do(context.Background())
+
+		if err != nil {
+			log.Printf("Error updating averageEmbedding for Reader %s: %v", readerID, err)
+			continue
+		}
+
+		log.Printf("Successfully updated averageEmbedding for Reader %s", readerID)
+	}
+
+	return nil
 }

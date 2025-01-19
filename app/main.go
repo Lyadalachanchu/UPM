@@ -3,8 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/weaviate/weaviate-go-client/v4/weaviate"
 	"log"
+	"net/http"
 	"os"
 )
 
@@ -49,6 +49,11 @@ func saveToJSONFile(papers map[string]Paper, readers map[string]Reader, filePath
 	return nil
 }
 
+type Data struct {
+	Papers  map[string]Paper  `json:"papers"`
+	Readers map[string]Reader `json:"readers"`
+}
+
 func readPapersFromJSON(filePath string) (map[string]Paper, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -56,37 +61,49 @@ func readPapersFromJSON(filePath string) (map[string]Paper, error) {
 	}
 	defer file.Close()
 
-	var papers map[string]Paper
-	if err := json.NewDecoder(file).Decode(&papers); err != nil {
+	var data Data
+	if err := json.NewDecoder(file).Decode(&data); err != nil {
 		return nil, fmt.Errorf("error decoding JSON: %v", err)
 	}
 
-	return papers, nil
+	return data.Papers, nil
 }
 
 func main() {
-	err, papers := fetchPapersWithReferencesAndEnrichWithEmbeddings(300)
+	//err, papers := fetchPapersWithReferencesAndEnrichWithEmbeddings(300)
+	//
+	//readers := map[string]Reader{}
+	//err = saveToJSONFile(papers, readers, "papers.json")
+	//
+	//if err != nil {
+	//	log.Fatalf("Error saving to JSON file: %v", err)
+	//}
 
-	readers := map[string]Reader{}
-	err = saveToJSONFile(papers, readers, "papers.json")
+	//papers, err := readPapersFromJSON("papers.json")
 
+	//client, err := weaviate.NewClient(weaviate.Config{
+	//	Host:   "localhost:8080",
+	//	Scheme: "http",
+	//})
+	//if err != nil {
+	//	log.Fatalf("Error initializing Weaviate client: %v", err)
+	//}
+
+	//if err := setupSchema(client); err != nil {
+	//	log.Fatalf("Error setting up schema: %v", err)
+	//}
+
+	//if err := saveToDatabase(client, papers); err != nil {
+	//	log.Fatalf("Error saving to database: %v", err)
+	//}
+	//
+	//if err := updateAllReadersAverageEmbedding(client); err != nil {
+	//	log.Fatalf("Error updating reader average embedding: %v", err)
+	//}
+
+	SetupRoutes()
+	err := http.ListenAndServe(":8081", nil)
 	if err != nil {
-		log.Fatalf("Error saving to JSON file: %v", err)
-	}
-
-	client, err := weaviate.NewClient(weaviate.Config{
-		Host:   "localhost:8080",
-		Scheme: "http",
-	})
-	if err != nil {
-		log.Fatalf("Error initializing Weaviate client: %v", err)
-	}
-
-	if err := setupSchema(client); err != nil {
-		log.Fatalf("Error setting up schema: %v", err)
-	}
-
-	if err := saveToDatabase(client, papers); err != nil {
-		log.Fatalf("Error saving to database: %v", err)
+		log.Fatalf("Failed to start server: %v", err)
 	}
 }
