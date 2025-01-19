@@ -9,6 +9,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -79,15 +81,21 @@ func fetchPapersFromArxiv(category, startDate, endDate string, batchSize, maxPap
 	return arxivIDs, nil
 }
 
-func fetchBatchFromSemanticScholar(arxivIDs []string, batchSize int) (map[string]Paper, error) {
+const requestInterval = time.Second * 3
+
+func fetchBatchFromSemanticScholarThrottled(arxivIDs []string, batchSize int) (map[string]Paper, error) {
 	const baseURL = "https://api.semanticscholar.org/graph/v1/paper/batch"
 	const fields = "title,abstract,authors,references.title,references.abstract,references.authors"
 	results := make(map[string]Paper)
+
+	ticker := time.NewTicker(requestInterval)
+	defer ticker.Stop()
+
 	client := getSession()
-
 	for i := 0; i < len(arxivIDs); i += batchSize {
-		batch := arxivIDs[i:min(i+batchSize, len(arxivIDs))]
+		<-ticker.C
 
+		batch := arxivIDs[i:min(i+batchSize, len(arxivIDs))]
 		payload := map[string]interface{}{
 			"ids": formatIDs(batch),
 		}
@@ -101,7 +109,6 @@ func fetchBatchFromSemanticScholar(arxivIDs []string, batchSize int) (map[string
 		if err != nil {
 			return nil, fmt.Errorf("error creating request: %v", err)
 		}
-
 		req.Header.Set("Content-Type", "application/json")
 		query := req.URL.Query()
 		query.Add("fields", fields)
@@ -109,14 +116,10 @@ func fetchBatchFromSemanticScholar(arxivIDs []string, batchSize int) (map[string
 
 		resp, err := client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("error sending request: %v", err)
+			log.Printf("Error sending request: %v", err)
+			continue
 		}
-		defer func(Body io.ReadCloser) {
-			err := Body.Close()
-			if err != nil {
-				log.Printf("Error closing response body: %v", err)
-			}
-		}(resp.Body)
+		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
@@ -338,7 +341,7 @@ func enrichPapersWithEmbeddings(papers map[string]Paper) error {
 	total := len(texts)
 	fmt.Printf("Enriching embeddings for %d texts\n", total)
 
-	embeddings, err := calculateEmbeddingsBatch(texts, total)
+	embeddings, err := calculateEmbeddingsParallel(texts, total)
 	if err != nil {
 		return fmt.Errorf("error calculating embeddings: %v", err)
 	}
@@ -360,6 +363,127 @@ func enrichPapersWithEmbeddings(papers map[string]Paper) error {
 	return nil
 }
 
+func calculateEmbeddingsParallel(texts []string, total int) ([][]float64, error) {
+	const batchSize = 10
+	const workerCount = 5
+	var (
+		mu         sync.Mutex
+		embeddings [][]float64
+		progress   int64
+		errs       []error
+		wg         sync.WaitGroup
+	)
+
+	tasks := make(chan []string, len(texts)/batchSize+1)
+	results := make(chan [][]float64, len(texts)/batchSize+1)
+
+	worker := func() {
+		defer wg.Done()
+		for batch := range tasks {
+			batchEmbeddings, err := fetchEmbeddings(batch)
+			if err != nil {
+				mu.Lock()
+				errs = append(errs, err)
+				mu.Unlock()
+				continue
+			}
+			results <- batchEmbeddings
+			atomic.AddInt64(&progress, int64(len(batch)))
+			printProgressBar(int(atomic.LoadInt64(&progress)), total)
+		}
+	}
+
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go worker()
+	}
+
+	go func() {
+		for i := 0; i < len(texts); i += batchSize {
+			end := i + batchSize
+			if end > len(texts) {
+				end = len(texts)
+			}
+			tasks <- texts[i:end]
+		}
+		close(tasks)
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	for batchEmbeddings := range results {
+		mu.Lock()
+		embeddings = append(embeddings, batchEmbeddings...)
+		mu.Unlock()
+	}
+
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("encountered %d errors during embedding calculation", len(errs))
+	}
+
+	printProgressBar(total, total)
+	fmt.Println()
+
+	return embeddings, nil
+}
+
+func fetchEmbeddings(batch []string) ([][]float64, error) {
+	payload := map[string]interface{}{
+		"texts": batch,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling payload: %v", err)
+	}
+
+	resp, err := http.Post("http://localhost:5001/calculate_embeddings", "application/json", bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return nil, fmt.Errorf("error sending request to embedding service: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("embedding service returned error: %s", string(body))
+	}
+
+	var response map[string]interface{}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response body: %v", err)
+	}
+
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return nil, fmt.Errorf("error unmarshalling response: %v", err)
+	}
+
+	embeddingsRaw, ok := response["embeddings"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid response format from embedding service")
+	}
+
+	var embeddings [][]float64
+	for _, embeddingRaw := range embeddingsRaw {
+		embeddingSlice, ok := embeddingRaw.([]interface{})
+		if !ok {
+			continue
+		}
+		var embedding []float64
+		for _, value := range embeddingSlice {
+			if floatVal, ok := value.(float64); ok {
+				embedding = append(embedding, floatVal)
+			}
+		}
+		embeddings = append(embeddings, embedding)
+	}
+
+	return embeddings, nil
+}
+
 func fetchPapersWithReferencesAndEnrichWithEmbeddings(maxPapers int) (error, map[string]Paper) {
 	arxivIDs, err := fetchPapersFromArxiv("cs.IR", "2020-01-01", "2024-12-31", 200, maxPapers)
 	if err != nil {
@@ -367,7 +491,7 @@ func fetchPapersWithReferencesAndEnrichWithEmbeddings(maxPapers int) (error, map
 	}
 	log.Printf("Fetched %d Arxiv IDs", len(arxivIDs))
 
-	papers, err := fetchBatchFromSemanticScholar(arxivIDs, 50)
+	papers, err := fetchBatchFromSemanticScholarThrottled(arxivIDs, 50)
 	if err != nil {
 		log.Fatalf("Error fetching from Semantic Scholar: %v", err)
 	}

@@ -50,7 +50,7 @@ func saveToJSONFile(papers map[string]Paper, readers map[string]Reader, filePath
 }
 
 func main() {
-	err, papers := fetchPapersWithReferencesAndEnrichWithEmbeddings(10)
+	err, papers := fetchPapersWithReferencesAndEnrichWithEmbeddings(300)
 
 	readers := map[string]Reader{}
 	err = saveToJSONFile(papers, readers, "papers.json")
