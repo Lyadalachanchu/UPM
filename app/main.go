@@ -49,6 +49,21 @@ func saveToJSONFile(papers map[string]Paper, readers map[string]Reader, filePath
 	return nil
 }
 
+func readPapersFromJSON(filePath string) (map[string]Paper, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("error opening file: %v", err)
+	}
+	defer file.Close()
+
+	var papers map[string]Paper
+	if err := json.NewDecoder(file).Decode(&papers); err != nil {
+		return nil, fmt.Errorf("error decoding JSON: %v", err)
+	}
+
+	return papers, nil
+}
+
 func main() {
 	err, papers := fetchPapersWithReferencesAndEnrichWithEmbeddings(300)
 

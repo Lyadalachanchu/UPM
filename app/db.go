@@ -187,10 +187,13 @@ func createPaperWithAuthors(client *weaviate.Client, paper Paper, authorUUIDs []
 		ID: strfmt.UUID(id),
 	}
 
+	newEmbeddings := make([]float32, len(paper.Embedding))
+
 	_, err := client.Data().Creator().
 		WithClassName("Paper").
 		WithProperties(object.Properties).
 		WithID(id).
+		WithVector(newEmbeddings).
 		Do(context.Background())
 	if err != nil {
 		return "", fmt.Errorf("error creating Paper: %v", err)
