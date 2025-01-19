@@ -11,8 +11,8 @@ if __name__ == "__main__":
     # initial_paper_arxiv_ids = ["2308.06512"]
     initial_paper_arxiv_ids = fetch_arxiv_papers_with_dates(
         category="cs.IR",
-        batch_size=0,
-        max_papers=0,
+        batch_size=10,
+        max_papers=10,
         start_date="2020-01-01",
         end_date="2024-12-31"
     )
